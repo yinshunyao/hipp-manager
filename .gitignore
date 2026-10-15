@@ -1,0 +1,34 @@
+# Python runtime
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local secrets (keep .env.sample; keep web/.env.production for Vite base)
+.env
+.env.local
+.env.*.local
+!.env.sample
+
+# Frontend deps / build / local Vite overrides
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env.*.local
+
+# Runtime data (keep directory via .gitkeep)
+data/*
+!data/.gitkeep
+
+# Keys / certs (payment, TLS)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

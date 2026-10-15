@@ -1,0 +1,58 @@
+import { useEffect } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Spin } from 'antd'
+import AppLayout from './layouts/AppLayout'
+import LoginPage from './pages/LoginPage'
+import ProfilePage from './pages/ProfilePage'
+import WalletPage from './pages/WalletPage'
+import TransactionsPage from './pages/TransactionsPage'
+import BillsPage from './pages/BillsPage'
+import { useAuthStore } from './store/auth'
+import { getToken } from './api/client'
+
+const basename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/'
+
+function Guard({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user)
+  const loading = useAuthStore((s) => s.loading)
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+        <Spin />
+      </div>
+    )
+  }
+  if (!user && !getToken()) return <Navigate to="/login" replace />
+  if (!user) return <Navigate to="/login" replace />
+  return children
+}
+
+export default function App() {
+  const hydrate = useAuthStore((s) => s.hydrate)
+  useEffect(() => {
+    void hydrate()
+  }, [hydrate])
+
+  return (
+    <BrowserRouter basename={basename === '/' ? undefined : basename}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/"
+          element={
+            <Guard>
+              <AppLayout />
+            </Guard>
+          }
+        >
+          <Route index element={<Navigate to="/profile" replace />} />
+          <Route path="profile" element={<ProfilePage />} />
+          <Route path="wallet" element={<WalletPage />} />
+          <Route path="transactions" element={<TransactionsPage />} />
+          <Route path="bills" element={<BillsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
