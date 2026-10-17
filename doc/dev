@@ -1,0 +1,298 @@
+# hipp-manager 开发手册
+
+面向本地开发与联调：工程怎么跑、目录怎么分、接口与前端路由在哪。需求/设计细节以 `01-or` / `02-dr` 为准；生产部署与完整环境变量以 [`99-ops/run.md`](99-ops/run.md) 为准。
+
+---
+
+## 1. 定位
+
+- **做什么**：跨产品统一身份（手机号）+ 共享钱包（充值/流水/账单）+ 平台运营台 + 公共媒体。
+- **产品码**：`mgr`（用户端 `/mgr/`，运营台 `/mgr/manager/`）。
+- **谁调用**：hipp-or、VoiceFix（vf）、hipp-https（cert）等通过用户 Bearer 会话或 S2S（`X-Manager-Key`）接入。
+- **不做**：各产品业务审批 UI（留在各产品 `/…/manager/`）；微信小程序登录（or 侧本地）；第二套资金账本。
+
+---
+
+## 2. 技术栈
+
+| 层 | 选型 |
+|:---|:---|
+| 后端 | Python 3.12、FastAPI、Uvicorn、SQLAlchemy（建表）+ **原生 SQL**（业务读写）、bcrypt、Redis（会话/短信，mock 可内存） |
+| 支付 | 微信 Native、支付宝 RSA2（`page` / `precreate`）；开发可用 `RECHARGE_DEV_AUTO` |
+| 短信 | 阿里云；`SMS_MOCK=1` 固定码 `123456` |
+| 前端 | React 19、Vite 8、Ant Design 6、Zustand、React Router 7 |
+| 库 | 开发默认可 SQLite（`data/manager.db`）；**生产须 MySQL**（`DATABASE_URL`） |
+
+---
+
+## 3. 目录地图
+
+```text
+hipp-manager/
+├── .env / .env.sample     # 配置（从 sample 复制）
+├── requirements.txt
+├── data/
+│   ├── manager.db         # SQLite（DATABASE_URL 为空时）
+│   └── media/             # 公共媒体落盘
+├── server/
+│   ├── manager/           # 主应用包
+│   │   ├── __main__.py    # python -m manager
+│   │   ├── app.py         # FastAPI 组装、挂载 /mgr /media
+│   │   ├── api.py         # 身份 / 钱包 / 运营 / S2S 路由
+│   │   ├── auth_service.py
+│   │   ├── wallet_service.py
+│   │   ├── session.py
+│   │   ├── sms.py
+│   │   ├── db.py          # 引擎 + schema
+│   │   ├── products.py    # 产品码 / biz_type
+│   │   ├── ops_admin.py   # 运营管理员 CLI
+│   │   ├── import_legacy.py
+│   │   ├── wechat_pay.py / alipay_pay.py
+│   │   └── config.py
+│   └── media/             # POST /api/media/* 、S2S、静态目录配合
+└── web/
+    ├── vite.config.ts     # base=/mgr/，dev 代理 /api → :9100
+    └── src/
+        ├── App.tsx        # 用户端 + 运营台路由
+        ├── api/           # auth / wallet / ops / sso / client
+        ├── pages/         # 用户页；ops/ 运营页
+        ├── layouts/
+        └── store/
+```
+
+文档树：
+
+| 目录 | 用途 |
+|:---|:---|
+| `doc/01-or/` | 原始需求 |
+| `doc/02-dr/` | 设计（`01 身份` / `02 钱包` / `03 运营后台` / `04 媒体`） |
+| `doc/03-tr/` | 测试设计 |
+| `doc/99-ops/` | 运行、发布草稿 |
+| `doc/dev` | 本手册 |
+
+---
+
+## 4. 本地启动
+
+### 4.1 后端
+
+```bash
+cd hipp-manager
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp -n .env.sample .env
+# 开发建议保持：SMS_MOCK=1、RECHARGE_DEV_AUTO=1、DATABASE_URL 空（SQLite）
+PYTHONPATH=server python -m manager
+```
+
+- 监听：`MANAGER_HOST` / `MANAGER_PORT`（默认 `0.0.0.0:9100`）
+- 探活：`curl http://127.0.0.1:9100/health` → `{"ok":true}`
+- 若已 `npm run build`：浏览器打开 `http://127.0.0.1:9100/mgr/`
+
+### 4.2 前端（热更新）
+
+```bash
+cd hipp-manager/web
+npm install
+npm run dev
+```
+
+- 地址：`http://127.0.0.1:5175/mgr/`（`VITE_BASE` 默认 `/mgr/`）
+- Vite 把 `/api` 代理到 `http://127.0.0.1:9100`；开发时**先起后端**
+
+### 4.3 生产构建前端
+
+```bash
+cd hipp-manager/web
+npm run build   # 产出 web/dist，由后端挂载 /mgr/
+```
+
+### 4.4 常用环境变量（开发）
+
+完整表见 `.env.sample` 与 `99-ops/run.md`。本地最少关心：
+
+| 变量 | 开发建议 |
+|:---|:---|
+| `MANAGER_SESSION_SECRET` | 任意本地密钥 |
+| `MANAGER_S2S_KEY` | 与业务侧 `HIPP_MANAGER_KEY` 一致 |
+| `DATABASE_URL` | 空 → SQLite `data/manager.db` |
+| `SMS_MOCK` | `1` |
+| `RECHARGE_DEV_AUTO` | `1`（无真实支付时模拟入账） |
+| `MEDIA_PUBLIC_BASE` | 如 `http://127.0.0.1:9100` |
+
+---
+
+## 5. 日常开发约定
+
+1. **改需求先改 OR**：`doc/01-or/` → 同步 `02-dr` + `03-tr` → 再改代码（workspace `rules-workflow`）。
+2. **库表**：在 `db.py` 用 SQLAlchemy 建表；业务查询/更新写原生 SQL，勿用 ORM 查询 API。
+3. **产品码**：仅 `mgr` / `or` / `vf` / `cert`；禁止别名 `manager` / `voice` 新写入（见 `products.py`）。
+4. **资金字段**：充值单、流水、S2S 扣款/入账必须带 `product` + `biz_type`。
+5. **错误码**：业务失败返回稳定 `code` + `message`；前端按 `code` 分支（见 workspace `rules-api-error-codes`）。
+6. **中文界面**：枚举展示用中文映射，勿直接露英文码。
+7. **充值二维码**：用户端必须用 Modal，禁止嵌在充值页正文流。
+8. **稀疏表单**：资料/登录/充值区用窄列（如 `.page-content-narrow`），勿撑满主栏。
+
+---
+
+## 6. 前端路由
+
+`basename` = Vite `base`（生产/开发均为 `/mgr/`）。
+
+| 路径（相对 basename） | 页面 |
+|:---|:---|
+| `/login` | 用户登录 |
+| `/profile` | 资料 |
+| `/wallet` | 钱包 / 充值 |
+| `/transactions` | 流水 |
+| `/bills` | 月账单 |
+| `/manager/login` | 运营登录 |
+| `/manager/users` | 用户管理 |
+| `/manager/transactions` | 运营流水 |
+| `/manager/recharge` | 充值单 |
+| `/manager/adjust` | 手工入账/扣款 |
+| `/manager/password` | 运营改密 |
+
+浏览器完整 URL 示例：`http://127.0.0.1:5175/mgr/wallet`、`…/mgr/manager/users`。
+
+---
+
+## 7. HTTP API 索引
+
+鉴权约定（细节见对应 DR）：
+
+- 用户：`Authorization: Bearer <token>`
+- 运营：运营会话 Bearer（`/api/ops/...`）
+- S2S：请求头 `X-Manager-Key: <MANAGER_S2S_KEY>`
+
+### 7.1 身份 `/api/auth/*`
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| POST | `/api/auth/sms/send` | 发短信验证码 |
+| POST | `/api/auth/sms/login` | 短信登录（可自动注册） |
+| POST | `/api/auth/login` | 密码登录 |
+| POST | `/api/auth/logout` | 登出（吊销） |
+| GET | `/api/auth/me` | 当前用户（业务侧在线校验常用） |
+| PATCH | `/api/auth/me` | 改资料 |
+| POST | `/api/auth/password` | 设置/修改密码 |
+| POST | `/api/auth/password/reset` | 短信重置密码 |
+
+### 7.2 钱包 `/api/wallet/*`
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| GET | `/api/wallet/balance` | 余额 |
+| GET | `/api/wallet/presets` | 充值面额 |
+| GET | `/api/wallet/pay-channels` | 可用支付渠道 |
+| POST | `/api/wallet/recharge` | 下单 |
+| GET | `/api/wallet/recharge/orders` | 充值单列表 |
+| GET | `/api/wallet/recharge/{order_id}` | 单笔查询 |
+| POST | `/api/wallet/recharge/{order_id}/dev-pay` | 开发模拟支付 |
+| GET | `/api/wallet/transactions` | 流水 |
+| GET | `/api/wallet/bills` | 月账单 |
+| POST | `/api/wallet/notify/wechat` | 微信异步通知 |
+| POST | `/api/wallet/notify/alipay` | 支付宝异步通知 |
+
+### 7.3 S2S `/api/s2s/*`
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| GET | `/api/s2s/wallet/balance` | 查余额 |
+| POST | `/api/s2s/wallet/deduct` | 扣款（须 product + biz_type） |
+| POST | `/api/s2s/wallet/credit` | 入账 |
+| POST | `/api/s2s/media/delete` | 删媒体 |
+| POST | `/api/s2s/media/gc` | 媒体孤儿 GC |
+
+### 7.4 运营 `/api/ops/*`
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| POST | `/api/ops/auth/login` 等 | 运营登录 / 校验 / 登出 / me / 改密 |
+| GET | `/api/ops/users` | 用户列表 |
+| PUT | `/api/ops/users/{user_id}/blocked` | 拉黑/解禁 |
+| POST | `/api/ops/users/{user_id}/password` | 重置用户密码 |
+| GET | `/api/ops/transactions` | 全站流水 |
+| GET | `/api/ops/recharge/orders` | 充值单 |
+| POST | `/api/ops/wallet/credit` | 手工入账 |
+| POST | `/api/ops/wallet/debit` | 手工扣款 |
+
+### 7.5 媒体
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| POST | `/api/media/upload` | 用户上传（Bearer） |
+| DELETE | `/api/media` | 用户删除 |
+| GET | `/media/...` | 静态读取 |
+
+字段与错误码以 `doc/02-dr` 各模块为准。
+
+---
+
+## 8. 数据表（逻辑）
+
+启动时 `init_schema` 自动建表（SQLite / MySQL 方言在 `db.py`）。主要表：
+
+| 表 | 用途 |
+|:---|:---|
+| `user` | 用户、余额、`register_source`、拉黑 |
+| `ops_admin` | 平台运营管理员 |
+| `recharge_preset` | 充值面额 |
+| `recharge_order` | 充值单（`product` / `biz_type` / 渠道） |
+| `billing_transaction` | 流水 |
+| `user_monthly_consumption` | 月消费汇总 |
+| 媒体相关 | 见 `02-dr/04 媒体` |
+
+无数据库层外键；多表关联在 SQL 里显式 `JOIN`。
+
+---
+
+## 9. CLI 与数据工具
+
+在工程根、已激活 venv、`PYTHONPATH=server`：
+
+```bash
+# 新建运营管理员（初始密码 123456，登录后运营台改密）
+python -m manager.ops_admin create --username <name_or_phone>
+
+# 重置运营管理员密码为 123456
+python -m manager.ops_admin reset-password --username <name_or_phone>
+
+# 存量用户导入（MySQL 已建库；从同实例 hipp + voicefix 按手机号合并）
+python -m manager.import_legacy
+```
+
+---
+
+## 10. 业务系统接入（开发侧）
+
+| 系统 | 典型配置 |
+|:---|:---|
+| 通用 | `HIPP_MANAGER_BASE=http://127.0.0.1:9100` |
+| 需 S2S 扣款（如 VoiceFix） | 另配 `HIPP_MANAGER_KEY` = 本服务 `MANAGER_S2S_KEY` |
+| 支付回调 | 微信/支付宝 `notify_url` 必须指向 **本服务**公网路径（见 `99-ops/run.md`） |
+
+同站登录态：多产品共享会话令牌；业务接口应以本服务 `GET /api/auth/me`（或等价校验）判定在线，勿只信本产品本地令牌。
+
+---
+
+## 11. 联调检查清单
+
+- [ ] 后端 `/health` 正常；`.env` 已从 sample 复制
+- [ ] `SMS_MOCK=1` 下可用验证码 `123456` 登录 `/mgr/login`
+- [ ] 前端 dev 与后端同时开；充值在 `RECHARGE_DEV_AUTO=1` 下可走 `dev-pay`
+- [ ] 运营台：先 CLI 建管理员，再登录 `/mgr/manager/`
+- [ ] 改接口后同步对应 `02-dr` / `03-tr`；运维相关改 `99-ops`
+- [ ] 不把真实密钥、客户路径写进文档或提交进库
+
+---
+
+## 12. 相关需求与设计
+
+| 主题 | OR | DR |
+|:---|:---|:---|
+| 身份与钱包 | `01-or/【平台】统一身份与共享钱包.md` | `02-dr/01 身份/`、`02-dr/02 钱包/` |
+| 运营后台 | `01-or/【平台】运营后台用户与资金管理.md` | `02-dr/03 运营后台/` |
+| 公共媒体 | `01-or/【平台】公共媒体上传与访问.md` | `02-dr/04 媒体/` |
+
+测试设计镜像在 `doc/03-tr/` 同名模块目录。
