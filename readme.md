@@ -31,7 +31,7 @@ hipp-manager/
     ├── 02-dr/             # 开发设计
     ├── 03-tr/             # 测试设计
     ├── 99-ops/            # 运行与发布
-    └── dev                # 开发手册（本地联调、目录、接口索引）
+    └── dev/               # 开发手册（本地联调、目录、接口索引）
 ```
 
 ## 快速开始
@@ -59,7 +59,7 @@ npm run dev
 
 更细的环境变量、管理员 CLI、支付回调、业务系统接入见：
 
-- **开发手册**：[`doc/dev`](doc/dev)
+- **开发手册**：[`doc/dev/`](doc/dev/)（入口 [`doc/dev/readme.md`](doc/dev/readme.md)）
 - **运行说明**：[`doc/99-ops/run.md`](doc/99-ops/run.md)
 
 ## 路径与端口
@@ -79,7 +79,7 @@ npm run dev
 
 | 类型 | 路径 |
 |:---|:---|
-| 开发手册 | `doc/dev` |
+| 开发手册 | `doc/dev/`（见 `doc/dev/readme.md`） |
 | 需求 | `doc/01-or/` |
 | 设计 | `doc/02-dr/`（身份 / 钱包 / 运营 / 媒体） |
 | 测试设计 | `doc/03-tr/` |
