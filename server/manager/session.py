@@ -114,22 +114,25 @@ def _raw_token(header: str) -> str:
     return header[7:] if header.startswith("Bearer ") else header
 
 
-def issue(
+OPS_PREFIX = "ops:"
+
+
+def _issue_identity(
     secret: bytes,
-    telephone: str,
+    identity: str,
     now: int | None = None,
     registry: TokenRegistry | None = None,
 ) -> str:
     expires = (now if now is not None else int(time.time())) + SESSION_SECONDS
-    payload = f"{expires}.{telephone}"
+    payload = f"{expires}.{identity}"
     signature = hmac.new(secret, payload.encode("ascii"), hashlib.sha256).hexdigest()
     token = f"{payload}.{signature}"
     if registry is not None:
-        registry.remember(token, telephone, SESSION_SECONDS)
+        registry.remember(token, identity, SESSION_SECONDS)
     return token
 
 
-def read(
+def _read_identity(
     secret: bytes,
     header: str,
     now: int | None = None,
@@ -139,10 +142,10 @@ def read(
     pieces = token.split(".", 2)
     if len(pieces) != 3:
         return ""
-    exp_text, telephone, signature = pieces
-    if not telephone.isdigit():
+    exp_text, identity, signature = pieces
+    if not identity or "." in identity:
         return ""
-    payload = f"{exp_text}.{telephone}"
+    payload = f"{exp_text}.{identity}"
     expected = hmac.new(secret, payload.encode("ascii"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         return ""
@@ -154,7 +157,54 @@ def read(
         return ""
     if registry is not None and not registry.active(token):
         return ""
-    return telephone
+    return identity
+
+
+def issue(
+    secret: bytes,
+    telephone: str,
+    now: int | None = None,
+    registry: TokenRegistry | None = None,
+) -> str:
+    if not telephone.isdigit():
+        raise ValueError("telephone must be digits")
+    return _issue_identity(secret, telephone, now=now, registry=registry)
+
+
+def read(
+    secret: bytes,
+    header: str,
+    now: int | None = None,
+    registry: TokenRegistry | None = None,
+) -> str:
+    identity = _read_identity(secret, header, now=now, registry=registry)
+    if identity.isdigit():
+        return identity
+    return ""
+
+
+def issue_ops(
+    secret: bytes,
+    username: str,
+    now: int | None = None,
+    registry: TokenRegistry | None = None,
+) -> str:
+    u = (username or "").strip()
+    if not u or "." in u or ":" in u:
+        raise ValueError("invalid ops username")
+    return _issue_identity(secret, f"{OPS_PREFIX}{u}", now=now, registry=registry)
+
+
+def read_ops(
+    secret: bytes,
+    header: str,
+    now: int | None = None,
+    registry: TokenRegistry | None = None,
+) -> str:
+    identity = _read_identity(secret, header, now=now, registry=registry)
+    if identity.startswith(OPS_PREFIX):
+        return identity[len(OPS_PREFIX) :]
+    return ""
 
 
 def revoke(header: str, registry: TokenRegistry | None) -> None:

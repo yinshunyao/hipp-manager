@@ -15,7 +15,10 @@ export async function fetchPayChannels() {
 }
 
 export async function createRecharge(amount: number, channel?: string) {
-  const body: { amount: number; channel?: string } = { amount }
+  const body: { amount: number; channel?: string; product: string } = {
+    amount,
+    product: 'mgr',
+  }
   if (channel) body.channel = channel
   return apiRequest<{
     order_id: string

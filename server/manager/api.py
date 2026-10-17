@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.engine import Engine
 
-from manager import auth_service, session, wallet_service
+from manager import auth_service, ops_admin, session, wallet_service
+from manager.products import require_biz_type, require_product
 from manager.alipay_pay import (
     AlipayPayError,
     AlipayPaySettings,
@@ -60,7 +61,22 @@ def bind(
         profile = auth_service.get_by_phone(engine, phone)
         if not profile:
             raise HTTPException(status_code=401, detail="用户不存在")
+        if profile.get("is_blocked"):
+            raise HTTPException(status_code=401, detail="账号已被限制登录")
         return profile
+
+    def require_ops(request: Request) -> dict:
+        username = session.read_ops(
+            settings.session_secret,
+            request.headers.get("authorization", ""),
+            registry=token_registry,
+        )
+        if not username:
+            raise HTTPException(status_code=401, detail="请先以管理员登录")
+        admin = ops_admin.get_by_username(engine, username)
+        if not admin:
+            raise HTTPException(status_code=401, detail="管理员不存在")
+        return admin
 
     def require_s2s(request: Request) -> None:
         key = request.headers.get("X-Manager-Key") or request.headers.get("x-manager-key") or ""
@@ -100,7 +116,12 @@ def bind(
             raise HTTPException(status_code=400, detail="请填写验证码")
         if not verify_code(code_store, phone, code):
             raise HTTPException(status_code=400, detail="验证码不正确或已过期")
-        profile = auth_service.ensure_user(engine, phone)
+        product_raw = str(body.get("product") or body.get("register_source") or "mgr")
+        try:
+            register_source = require_product(product_raw)
+            profile = auth_service.ensure_user(engine, phone, register_source=register_source)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         token = session.issue(settings.session_secret, phone, registry=token_registry)
         return JSONResponse({"token": token, "access_token": token, **profile})
 
@@ -205,8 +226,14 @@ def bind(
     async def recharge(request: Request) -> JSONResponse:
         user = require_user(request)
         body = await _json(request)
+        product_raw = str(body.get("product") or "mgr")
         try:
-            order = wallet_service.create_recharge(engine, user["user_id"], body.get("amount"))
+            order = wallet_service.create_recharge(
+                engine,
+                user["user_id"],
+                body.get("amount"),
+                product=product_raw,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -275,11 +302,20 @@ def bind(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="分页参数无效") from exc
         status_f = (qp.get("status") or "").strip()
-        return JSONResponse(
-            wallet_service.list_recharge_orders(
-                engine, user["user_id"], page=page, page_size=page_size, status=status_f
+        product_f = (qp.get("product") or "").strip()
+        try:
+            return JSONResponse(
+                wallet_service.list_recharge_orders(
+                    engine,
+                    user["user_id"],
+                    page=page,
+                    page_size=page_size,
+                    status=status_f,
+                    product=product_f,
+                )
             )
-        )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/wallet/recharge/{order_id}")
     def recharge_detail(order_id: str, request: Request) -> JSONResponse:
@@ -317,9 +353,15 @@ def bind(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="分页参数无效") from exc
         product = (qp.get("product") or "").strip()
+        biz_type = (qp.get("biz_type") or "").strip()
         try:
             data = wallet_service.list_transactions(
-                engine, user["user_id"], page=page, page_size=page_size, product=product
+                engine,
+                user["user_id"],
+                page=page,
+                page_size=page_size,
+                product=product,
+                biz_type=biz_type,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -399,6 +441,7 @@ def bind(
                 user_id=str(body.get("user_id") or ""),
                 amount=body.get("amount"),
                 product=str(body.get("product") or ""),
+                biz_type=str(body.get("biz_type") or ""),
                 ref_id=str(body.get("ref_id") or ""),
                 remark=str(body.get("remark") or ""),
                 kind="deduct",
@@ -418,9 +461,216 @@ def bind(
                 user_id=str(body.get("user_id") or ""),
                 amount=body.get("amount"),
                 product=str(body.get("product") or ""),
+                biz_type=str(body.get("biz_type") or ""),
                 ref_id=str(body.get("ref_id") or ""),
                 remark=str(body.get("remark") or ""),
                 kind="credit",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    # ---------- ops auth ----------
+    @router.post("/api/ops/auth/login")
+    async def ops_login(request: Request) -> JSONResponse:
+        body = await _json(request)
+        username = str(body.get("username") or body.get("phone") or "").strip()
+        password = str(body.get("password") or "")
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="请填写用户名与密码")
+        admin = ops_admin.verify_password(engine, username, password)
+        if not admin:
+            raise HTTPException(status_code=400, detail="账号或密码错误")
+        token = session.issue_ops(
+            settings.session_secret, admin["username"], registry=token_registry
+        )
+        return JSONResponse(
+            {"token": token, "access_token": token, "username": admin["username"]}
+        )
+
+    @router.post("/api/ops/auth/verify")
+    async def ops_verify(request: Request) -> JSONResponse:
+        """他产品管理端校验平台管理员：密码或已有 ops Bearer。"""
+        body = await _json(request)
+        username = str(body.get("username") or body.get("phone") or "").strip()
+        password = str(body.get("password") or "")
+        if username and password:
+            admin = ops_admin.verify_password(engine, username, password)
+            if not admin:
+                return JSONResponse({"ok": False, "detail": "账号或密码错误"}, status_code=401)
+            return JSONResponse({"ok": True, "username": admin["username"]})
+        ops_user = session.read_ops(
+            settings.session_secret,
+            request.headers.get("authorization", ""),
+            registry=token_registry,
+        )
+        if ops_user and ops_admin.get_by_username(engine, ops_user):
+            return JSONResponse({"ok": True, "username": ops_user})
+        raise HTTPException(status_code=401, detail="校验失败")
+
+    @router.post("/api/ops/auth/logout")
+    def ops_logout(request: Request) -> JSONResponse:
+        session.revoke(request.headers.get("authorization", ""), token_registry)
+        return JSONResponse({"detail": "已退出"})
+
+    @router.get("/api/ops/auth/me")
+    def ops_me(request: Request) -> JSONResponse:
+        return JSONResponse(require_ops(request))
+
+    @router.post("/api/ops/auth/password")
+    async def ops_change_password(request: Request) -> JSONResponse:
+        admin = require_ops(request)
+        body = await _json(request)
+        old_password = str(body.get("old_password") or "")
+        new_password = str(body.get("new_password") or body.get("password") or "")
+        if not old_password or not new_password:
+            raise HTTPException(status_code=400, detail="请填写当前密码与新密码")
+        try:
+            out = ops_admin.change_password(
+                engine, admin["username"], old_password, new_password
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"username": out["username"], "detail": "密码已更新"})
+
+    # ---------- ops users / wallet ----------
+    @router.get("/api/ops/users")
+    def ops_users(request: Request) -> JSONResponse:
+        require_ops(request)
+        qp = request.query_params
+        try:
+            page = int(qp.get("page") or 1)
+            page_size = int(qp.get("page_size") or 20)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="分页参数无效") from exc
+        blocked_raw = (qp.get("is_blocked") or "").strip()
+        is_blocked = None
+        if blocked_raw in ("1", "true", "True"):
+            is_blocked = True
+        elif blocked_raw in ("0", "false", "False"):
+            is_blocked = False
+        try:
+            data = auth_service.list_users(
+                engine,
+                page=page,
+                page_size=page_size,
+                phone=(qp.get("phone") or "").strip(),
+                register_source=(qp.get("register_source") or "").strip(),
+                is_blocked=is_blocked,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(data)
+
+    @router.put("/api/ops/users/{user_id}/blocked")
+    async def ops_user_blocked(user_id: str, request: Request) -> JSONResponse:
+        require_ops(request)
+        body = await _json(request)
+        blocked = bool(body.get("blocked"))
+        try:
+            profile = auth_service.set_blocked(engine, user_id, blocked)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(profile)
+
+    @router.post("/api/ops/users/{user_id}/password")
+    async def ops_user_password(user_id: str, request: Request) -> JSONResponse:
+        require_ops(request)
+        body = await _json(request)
+        password = str(body.get("password") or body.get("new_password") or "")
+        try:
+            profile = auth_service.set_password(engine, user_id, password, force=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"user_id": profile["user_id"], "phone": profile["phone"]})
+
+    @router.get("/api/ops/transactions")
+    def ops_transactions(request: Request) -> JSONResponse:
+        require_ops(request)
+        qp = request.query_params
+        try:
+            page = int(qp.get("page") or 1)
+            page_size = int(qp.get("page_size") or 20)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="分页参数无效") from exc
+        try:
+            data = wallet_service.list_transactions(
+                engine,
+                None,
+                page=page,
+                page_size=page_size,
+                product=(qp.get("product") or "").strip(),
+                biz_type=(qp.get("biz_type") or "").strip(),
+                phone=(qp.get("phone") or "").strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(data)
+
+    @router.get("/api/ops/recharge/orders")
+    def ops_recharge_orders(request: Request) -> JSONResponse:
+        require_ops(request)
+        qp = request.query_params
+        try:
+            page = int(qp.get("page") or 1)
+            page_size = int(qp.get("page_size") or 20)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="分页参数无效") from exc
+        try:
+            data = wallet_service.list_recharge_orders(
+                engine,
+                None,
+                page=page,
+                page_size=page_size,
+                status=(qp.get("status") or "").strip(),
+                product=(qp.get("product") or "").strip(),
+                phone=(qp.get("phone") or "").strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(data)
+
+    @router.post("/api/ops/wallet/credit")
+    async def ops_wallet_credit(request: Request) -> JSONResponse:
+        admin = require_ops(request)
+        body = await _json(request)
+        remark = str(body.get("remark") or "").strip()
+        remark = f"{remark} ops:{admin['username']}".strip()
+        try:
+            require_product(str(body.get("product") or ""))
+            require_biz_type(str(body.get("biz_type") or ""))
+            result = wallet_service.s2s_adjust(
+                engine,
+                phone=str(body.get("phone") or ""),
+                user_id=str(body.get("user_id") or ""),
+                amount=body.get("amount"),
+                product=str(body.get("product") or ""),
+                biz_type=str(body.get("biz_type") or ""),
+                ref_id=str(body.get("ref_id") or ""),
+                remark=remark,
+                kind="credit",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @router.post("/api/ops/wallet/debit")
+    async def ops_wallet_debit(request: Request) -> JSONResponse:
+        admin = require_ops(request)
+        body = await _json(request)
+        remark = str(body.get("remark") or "").strip()
+        remark = f"{remark} ops:{admin['username']}".strip()
+        try:
+            result = wallet_service.s2s_adjust(
+                engine,
+                phone=str(body.get("phone") or ""),
+                user_id=str(body.get("user_id") or ""),
+                amount=body.get("amount"),
+                product=str(body.get("product") or ""),
+                biz_type=str(body.get("biz_type") or ""),
+                ref_id=str(body.get("ref_id") or ""),
+                remark=remark,
+                kind="deduct",
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

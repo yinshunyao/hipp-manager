@@ -79,7 +79,7 @@ def _load_voice(engine: Engine) -> dict[str, dict]:
             "balance": _d(r[5]),
             "avatar_path": str(r[6] or "").strip()[:512],
             "created_at": str(r[7] or "")[:32] or _now(),
-            "source": "voice",
+            "source": "vf",
         }
     return out
 
@@ -134,6 +134,7 @@ def _merge(voice: dict[str, dict], hipp: dict[str, dict]) -> list[dict]:
                     "avatar_path": (v["avatar_path"] or h["avatar_path"])[:512],
                     "balance": v["balance"],
                     "created_at": (v["created_at"] or h["created_at"] or _now())[:32],
+                    "register_source": "vf",
                 }
             )
         elif v:
@@ -147,6 +148,7 @@ def _merge(voice: dict[str, dict], hipp: dict[str, dict]) -> list[dict]:
                     "avatar_path": v["avatar_path"][:512],
                     "balance": v["balance"],
                     "created_at": (v["created_at"] or _now())[:32],
+                    "register_source": "vf",
                 }
             )
         else:
@@ -161,6 +163,7 @@ def _merge(voice: dict[str, dict], hipp: dict[str, dict]) -> list[dict]:
                     "avatar_path": h["avatar_path"][:512],
                     "balance": Decimal("0.00"),
                     "created_at": (h["created_at"] or _now())[:32],
+                    "register_source": "or",
                 }
             )
     return merged
@@ -200,8 +203,8 @@ def upsert_users(target: Engine, rows: list[dict]) -> tuple[int, int]:
                 conn.execute(
                     text(
                         "INSERT INTO user (user_id, phone, nickname, password_hash, has_password, "
-                        "avatar_path, balance, created_at) "
-                        "VALUES (:id, :p, :n, :ph, :hp, :a, :b, :t)"
+                        "avatar_path, balance, register_source, is_blocked, created_at) "
+                        "VALUES (:id, :p, :n, :ph, :hp, :a, :b, :src, 0, :t)"
                     ),
                     {
                         "id": row["user_id"],
@@ -211,6 +214,7 @@ def upsert_users(target: Engine, rows: list[dict]) -> tuple[int, int]:
                         "hp": int(row["has_password"]),
                         "a": row["avatar_path"],
                         "b": str(row["balance"]),
+                        "src": row.get("register_source") or "mgr",
                         "t": row["created_at"],
                     },
                 )

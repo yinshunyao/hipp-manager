@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Layout, Menu, Typography, Button, theme, Avatar, Space } from 'antd'
 import {
   UserOutlined,
@@ -5,9 +6,11 @@ import {
   TransactionOutlined,
   FileTextOutlined,
   LogoutOutlined,
+  MailOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
+import ContactUsModal from '../components/ContactUsModal'
 
 const { Header, Sider, Content } = Layout
 
@@ -17,6 +20,7 @@ export default function AppLayout() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const { token } = theme.useToken()
+  const [contactOpen, setContactOpen] = useState(false)
   const selected = location.pathname.startsWith('/wallet')
     ? 'wallet'
     : location.pathname.startsWith('/transactions')
@@ -40,8 +44,15 @@ export default function AppLayout() {
             { key: 'wallet', icon: <WalletOutlined />, label: '余额充值' },
             { key: 'transactions', icon: <TransactionOutlined />, label: '流水' },
             { key: 'bills', icon: <FileTextOutlined />, label: '月账单' },
+            { key: 'contact', icon: <MailOutlined />, label: '联系我们' },
           ]}
-          onClick={({ key }) => navigate(`/${key === 'profile' ? 'profile' : key}`)}
+          onClick={({ key }) => {
+            if (key === 'contact') {
+              setContactOpen(true)
+              return
+            }
+            navigate(`/${key === 'profile' ? 'profile' : key}`)
+          }}
         />
       </Sider>
       <Layout>
@@ -74,6 +85,7 @@ export default function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+      <ContactUsModal open={contactOpen} onClose={() => setContactOpen(false)} />
     </Layout>
   )
 }

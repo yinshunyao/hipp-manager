@@ -21,8 +21,20 @@
 | `WECHAT_PAY_*` | 微信 Native；未启用时可用 `RECHARGE_DEV_AUTO=1` |
 | `ALIPAY_*` | 支付宝 RSA2；`ALIPAY_TRADE_MODE=page|precreate`；回调 `ALIPAY_NOTIFY_URL` |
 | `RECHARGE_DEV_AUTO` | 开发模拟支付入账 |
+| `MEDIA_PUBLIC_BASE` | 媒体绝对 URL 基址（如 `https://hipp.site`）；空则按请求 Host 推导 |
+| `MEDIA_MAX_BYTES` | 单文件上限，默认 20971520（20MiB） |
+| `MEDIA_DIR` | 可选，覆盖默认 `data/media/` |
+
+公共媒体：`POST /api/media/upload`（Bearer）；`DELETE /api/media`；S2S `POST /api/s2s/media/delete`、`POST /api/s2s/media/gc`；静态读 `GET /media/...`。生产 Nginx 须反代 `/media/`，且 `/api/media/` 的 `client_max_body_size` ≥20m。孤儿定时由各产品（如 or）在凌晨触发 gc。
 
 存量用户导入（MySQL 已建库后）：`PYTHONPATH=server python -m manager.import_legacy`（从同实例 `hipp` + `voicefix` 按手机号合并）。
+
+平台管理员（运营台 `/mgr/manager/`，亦可供 or/vf/cert 管理端校验）。新建与 CLI 重置均为初始密码 `123456`，登录后在运营台「改密」自行修改；命令行不设自定义口令：
+
+```bash
+PYTHONPATH=server python -m manager.ops_admin create --username <name_or_phone>
+PYTHONPATH=server python -m manager.ops_admin reset-password --username <name_or_phone>
+```
 
 ## 启动后端
 

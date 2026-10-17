@@ -8,3 +8,9 @@ body {
   font-family: 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   background: #f5f7fb;
 }
+
+/* 控件少的表单/充值等操作区：限制列宽，左侧对齐、右侧留白；表格类页面勿套用 */
+.page-content-narrow {
+  width: 100%;
+  max-width: 480px;
+}

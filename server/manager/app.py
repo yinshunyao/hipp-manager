@@ -18,6 +18,7 @@ from manager.db import init_schema, make_engine
 from manager.session import make_registry
 from manager.sms import make_store
 from manager.wechat_pay import WeChatPaySettings
+from media import build_router as build_media_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -35,6 +36,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.include_router(bind(settings, engine, code_store, wechat, alipay, token_registry))
+    app.include_router(build_media_router(settings, engine, token_registry))
+    app.mount(
+        "/media",
+        StaticFiles(directory=str(settings.media_dir), check_dir=True),
+        name="media",
+    )
 
     dist: Path = settings.web_dist
     if dist.is_dir():

@@ -1,9 +1,17 @@
 # 发布草稿
 
+- **公共媒体上传与删除**：`server/media`；`POST /api/media/upload`、`DELETE /api/media`、`POST /api/s2s/media/delete`、`POST /api/s2s/media/gc`；`/media` 静态；`MEDIA_PUBLIC_BASE` / `MEDIA_MAX_BYTES`。or 待发取消、结题清理与每日孤儿扫盘走上述接口。见 `doc/01-or/【平台】公共媒体上传与访问.md`。
+- **运营台与产品码统一**：产品码仅 `mgr`/`or`/`vf`/`cert`；流水/充值增加 `biz_type`；用户 `register_source`/`is_blocked`；CLI `python -m manager.ops_admin`；运营台 `/mgr/manager/`（用户/流水/充值单/手工动账）；各产品管理后台规划为 `/{product}/manager/`；S2S 必填 `product`+`biz_type`。全局规则 `rules-hipp-product-codes.mdc`。见 `doc/01-or/【平台】运营后台用户与资金管理.md`。
+- **平台管理员口令**：新建/CLI 重置固定初始密码 `123456`；登录后运营台「改密」自改；CLI 仅 `create` / `reset-password`（无自定义口令参数）。
+- **充值订单列表**：`GET /api/wallet/recharge/orders` 支持 query `product` 筛选（or 账户页默认只看本产品）。
+- **充值/资料窄栏**：余额充值与资料改密页使用 `.page-content-narrow`（max-width 480px），宽屏右侧留白；流水/账单仍全宽。
+- **联系我们弹窗**：侧栏增加入口，字段与 or 用户端一致（含备案号蜀ICP备2024076719号-1）；样式对齐账户中心金色顶栏。
 - **业务产品鉴权二次校验**：约定 cert / or（Web）/ vf 需鉴权接口由各后端向本服务 `/api/auth/me` 校验在线（短缓存）；吊销后各产品业务接口 401。本服务接口未改协议。
 - **支付宝收款**：`ALIPAY_*` 公钥模式 RSA2；`POST /api/wallet/recharge` 支持 `channel=alipay|wechat`；`GET /api/wallet/pay-channels`；异步通知 `POST /api/wallet/notify/alipay` 验签入账。控制台可选支付渠道。
 - **充值 UI**：支付渠道改为微信/支付宝大卡片置顶；面额两列大按钮（对齐 VoiceFix）；下方为金额输入与充值按钮（mgr / vf / cert 一致）。
-- **支付宝 APPID**：现网切至网页应用 `2021007108665442`（`秘钥web支付/`）；旧 `2021002191622113` 备份见配置信息 `web用用备份.md`。
+- **支付宝 APPID**：现网切至网页应用 `2021007108665442`（`秘钥-电脑网站支付/`）；旧 `2021002191622113` 备份见配置信息 `电脑网站支付-旧应用备份.md`；当面付申请见 `当面付-申请帮助手册.md`。
+- **支付宝当面付**：现网 `ALIPAY_TRADE_MODE=precreate`（`alipay.trade.precreate` 扫码直唤）；回退网页收银台改 `page`。
+- **充值支付码弹窗**：mgr / cert / vf 下单后二维码与提示均在 Modal 内展示，不再嵌在充值页正文。
 - 新建 hipp-manager：统一身份（短信/密码/资料/改密）与共享钱包（余额/充值/流水/账单/S2S）。
 - 账户控制台挂载 `/mgr/`。
 - hipp-https 登录改走 `HIPP_MANAGER_BASE`，新增个人中心代理页。

@@ -47,6 +47,8 @@ class Settings:
     recharge_dev_auto: bool
     data_dir: Path
     media_dir: Path
+    media_public_base: str
+    media_max_bytes: int
     web_dist: Path
 
 
@@ -55,7 +57,10 @@ def load_settings() -> Settings:
     _load_dotenv(root / ".env")
     data_dir = root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    media_dir = data_dir / "media"
+    media_override = (os.environ.get("MEDIA_DIR") or "").strip()
+    media_dir = Path(media_override).expanduser() if media_override else (data_dir / "media")
+    if not media_dir.is_absolute():
+        media_dir = (root / media_dir).resolve()
     media_dir.mkdir(parents=True, exist_ok=True)
 
     secret = (os.environ.get("MANAGER_SESSION_SECRET") or "dev-manager-secret").encode("utf-8")
@@ -63,6 +68,12 @@ def load_settings() -> Settings:
     if not db_url:
         db_path = (data_dir / "manager.db").resolve()
         db_url = f"sqlite:///{db_path}"
+
+    max_bytes_raw = (os.environ.get("MEDIA_MAX_BYTES") or "").strip()
+    try:
+        media_max_bytes = int(max_bytes_raw) if max_bytes_raw else 20 * 1024 * 1024
+    except ValueError:
+        media_max_bytes = 20 * 1024 * 1024
 
     return Settings(
         host=(os.environ.get("MANAGER_HOST") or "0.0.0.0").strip(),
@@ -81,5 +92,7 @@ def load_settings() -> Settings:
         recharge_dev_auto=_truthy("RECHARGE_DEV_AUTO", "0"),
         data_dir=data_dir,
         media_dir=media_dir,
+        media_public_base=(os.environ.get("MEDIA_PUBLIC_BASE") or "").strip().rstrip("/"),
+        media_max_bytes=max(1024, media_max_bytes),
         web_dist=root / "web" / "dist",
     )

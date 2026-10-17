@@ -19,7 +19,7 @@ export async function sendSms(phone: string) {
 export async function loginSms(phone: string, code: string) {
   const data = await apiRequest<{ token: string } & UserProfile>('/auth/sms/login', {
     method: 'POST',
-    json: { phone, code },
+    json: { phone, code, product: 'mgr' },
     skipAuth: true,
   })
   setToken(data.token)
